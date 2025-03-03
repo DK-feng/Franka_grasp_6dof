@@ -7,7 +7,7 @@ p.setAdditionalSearchPath(pybullet_data.getDataPath())
 
 
 p.loadURDF("plane.urdf", [0, 0, -0.3])
-frankaId = p.loadURDF("test_urdf/panda_modified.urdf", [0, 0, 0], useFixedBase=True)
+frankaId = p.loadURDF("/home/kaifeng/FYP/URDF_files/panda_franka/panda_modified.urdf", [0, 0, 0], useFixedBase=True)
 p.resetBasePositionAndOrientation(frankaId, [0, 0, -0.3], [0, 0, 0, 1])
 
 

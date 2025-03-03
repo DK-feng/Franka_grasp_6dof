@@ -45,8 +45,8 @@ for i in range(100000):
 
     if i == 20:
         set_position(frankaId,joint_indices,joint_forces,
-                     target_position=[0.3, 0, 0.6],
-                     target_orientation=p.getQuaternionFromEuler([np.pi,-np.pi/9,0]))
+                     target_position=[0.3, 0, 0.5],
+                     target_orientation=p.getQuaternionFromEuler([np.pi , -np.pi/18, 0]))
     p.stepSimulation()
     time.sleep(1/240)
 

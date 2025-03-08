@@ -35,7 +35,7 @@ model = SAC(
 )
 
 # 开始训练 1M step
-model.learn(total_timesteps=100000)
+model.learn(total_timesteps=10000)
 
 # 保存模型
 model.save("sac_panda_reach")

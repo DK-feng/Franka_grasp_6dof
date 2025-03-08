@@ -14,7 +14,7 @@ def set_position(robot_id,joint_indices,joint_forces, target_position, target_or
                                 controlMode=p.POSITION_CONTROL,
                                 targetPositions=joint_positions,
                                 forces=joint_forces)
-    for _ in range(20):
+    for _ in range(200):
         p.stepSimulation()
         time.sleep(1/240)
 
@@ -24,7 +24,7 @@ p.connect(p.GUI)
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
 
 p.loadURDF("plane.urdf", [0, 0, 0])
-frankaId = p.loadURDF("/home/kaifeng/FYP/URDF_files/panda_franka/panda_modified.urdf", [0, 0, 0], useFixedBase=True)
+frankaId = p.loadURDF("/home/kaifeng/FYP/franka_grasp_rl_6dof/models/panda_franka/panda_modified.urdf", [0, 0, 0], useFixedBase=True)
 p.resetBasePositionAndOrientation(frankaId, [0, 0, 0], [0, 0, 0, 1])
 
 p.setGravity(0,0,-10)
@@ -45,8 +45,8 @@ for i in range(100000):
 
     if i == 20:
         set_position(frankaId,joint_indices,joint_forces,
-                     target_position=[0.3, 0, 0.5],
-                     target_orientation=p.getQuaternionFromEuler([np.pi , -np.pi/18, 0]))
+                     target_position=[0.4, 0, 0.4],
+                     target_orientation=p.getQuaternionFromEuler([np.pi , 0, 0]))
     p.stepSimulation()
     time.sleep(1/240)
 

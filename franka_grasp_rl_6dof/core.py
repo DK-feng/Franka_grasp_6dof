@@ -503,15 +503,17 @@ class RobotTaskEnv(gym.Env):
         if self._env_step == 0:
             self.target_object_ID = self._get_target_object_ID(mask, true_mask)
 
-
         # [N, 3], 从depth_image里生成基于camera frame的目标物体的point_cloud, 0.03S
         target_points, obstacal_points, plane_points = self._generate_pc_from_depth(depth_image, mask)
 
+        print(target_points.shape)
         # [N, 3], 将pc转换到world frame下
         target_points_worldframe = self._camera_to_world(target_points)
         obstacal_points_worldframe = self._camera_to_world(obstacal_points)
         plane_points_worldframe = self._camera_to_world(plane_points)
+        print(target_points_worldframe.shape)
 
+        print(self.curr_acc_target_points.shape)
         # [N + new points, 3], 先转换为世界坐标系下再累积
         self.update_curr_acc_target_points(target_points_worldframe)
         if self.exist_obstacal:
@@ -519,14 +521,16 @@ class RobotTaskEnv(gym.Env):
         if self.return_plane_points:
             self.update_curr_acc_plane_points(plane_points_worldframe)
 
-
+        print(self.curr_acc_target_points.shape)
+        timer = Timer()
         # 向上/下采样为固定点数，0.2S
         self.curr_acc_target_points = regularize_pc_point_count(self.curr_acc_target_points, self._fixed_num_points * self.split, use_farthest_point=True)
+        print(timer.record_and_reset())
         if self.exist_obstacal:
             self.curr_acc_obstacal_points = regularize_pc_point_count(self.curr_acc_obstacal_points, self._fixed_num_points * (1-self.split) - self.plane_points, use_farthest_point=True)
         if self.return_plane_points:
             self.curr_acc_plane_points = regularize_pc_point_count(self.curr_acc_plane_points, self.plane_points, use_farthest_point=True)
-
+        print(self.curr_acc_target_points.shape)
 
         # 所有的点云,将target的点云上移5cm,其它点云下降5cm以区分,同时归一化处理
         all_PC = normalize_point_cloud(np.concatenate([self.curr_acc_target_points+np.array([0,0,0.05]),
@@ -833,7 +837,7 @@ class RobotTaskEnv(gym.Env):
             return
         if new_points.shape[0] == 0:    
             return
-        new_points = bound_points(new_points, centroid=self.task.drop_positions, width=0.4)  # 限定障碍物点云的范围为中心为(0.6, 0, 0)的边长为0.6的矩形
+        new_points = bound_points(new_points, centroid=self.task.drop_positions, width=0.4)  # 限定障碍物点云的范围为中心为drop_position的边长为0.6的矩形
         index = np.random.choice(
             range(new_points.shape[0]),
             size=int(self._pt_accumulate_ratio**self._env_step * new_points.shape[0]),

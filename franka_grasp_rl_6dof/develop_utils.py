@@ -3,6 +3,9 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import ListedColormap, BoundaryNorm
 import open3d as o3d
+import pybullet as p
+import pybullet_data
+import time
 
 
 def analyze_mask(mask: np.array):
@@ -71,6 +74,66 @@ def visualize_point_cloud(point_clouds):
         width=1280, height=960)
 
 
+
+
+
+
+def calculate_joint_states_based_on_ee_placement(ee_position, ee_euler):
+    # 根据末端执行器姿态返回关节角度
+    def set_position(robot_id, joint_indices, joint_forces, target_position, target_orientation, ee_link):
+        """控制机械臂的关节角度，使末端执行器达到目标位置和姿态"""
+        joint_positions = p.calculateInverseKinematics(
+            robot_id,
+            ee_link,
+            targetPosition=target_position,
+            targetOrientation=target_orientation)
+        p.setJointMotorControlArray(
+            robot_id,
+            jointIndices=joint_indices,
+            controlMode=p.POSITION_CONTROL,
+            targetPositions=joint_positions,
+            forces=joint_forces)
+    
+        for _ in range(480):
+            p.stepSimulation()
+            time.sleep(1/240)
+        
+    p.connect(p.GUI)
+    p.setAdditionalSearchPath(pybullet_data.getDataPath())
+
+    p.loadURDF("plane.urdf", [0, 0, 0])
+    franka_id = p.loadURDF(
+        "/home/kaifeng/FYP/franka_grasp_rl_6dof/models/panda_franka/panda_modified.urdf",
+        [0, 0, 0], useFixedBase=True
+    )
+    p.resetBasePositionAndOrientation(franka_id, [0, 0, 0], [0, 0, 0, 1])
+    p.setGravity(0, 0, -10)
+
+    ee_link = 11
+    neutral_joint_values = np.array([0.00, 0.41, 0.00, -1.85, 0.00, 2.26, 0.79, 0.00, 0.00])
+    joint_forces = np.array([87.0, 87.0, 87.0, 87.0, 12.0, 120.0, 120.0, 170.0, 170.0])
+    joint_indices = np.array([0, 1, 2, 3, 4, 5, 6, 9, 10])
+
+    # 复位关节到中立位姿
+    for joint, angle in zip(joint_indices, neutral_joint_values):
+        p.resetJointState(franka_id, joint, angle)
+
+    ee_quaternion = p.getQuaternionFromEuler(ee_euler)
+    set_position(franka_id, joint_indices, joint_forces, ee_position, ee_quaternion, ee_link)
+
+    joint_states = p.getJointStates(franka_id, joint_indices)
+    joint_positions = np.array([state[0] for state in joint_states])
+    y = [f'{x:.3f}' for x in joint_positions]
+    print(f'\n---ee_position:{ee_position}---ee_euler:{ee_euler}---')
+    print(f'---joint states:{y}---')
+
+    p.disconnect()
+
+
+
+
+
+
 if __name__ == '__main__':
 
-    print(0.98 ** 50)
+    calculate_joint_states_based_on_ee_placement(ee_position=[0.4, 0, 0.4], ee_euler=[np.pi, 0, 0])

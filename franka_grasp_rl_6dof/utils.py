@@ -88,7 +88,7 @@ def regularize_pc_point_count(pc, npoints, use_farthest_point=False):
     """
     npoints = int(npoints)
     if pc.shape[0] == 0:
-        print("\n---WARNING! Empty Point Cloud, Programme Stoped---\n")
+        print("\n---WARNING! Empty Point Cloud---\n")
         return pc
     
     elif pc.shape[0] > npoints:
@@ -168,3 +168,45 @@ def normalize_point_cloud(points):
     return points
 
 
+def farthest_point_sampling_torch_optimized(points, num_samples):
+    """
+    PyTorch GPU优化版最远点采样(FPS)
+    采用向量化计算 O(N) 复杂度，远比 O(NM) 版本更快
+    :param points: (N, 3)  PyTorch Tensor 点云数据（必须在 GPU 上）
+    :param num_samples: 采样点数
+    :return: (M, 3)  采样后的点
+    """
+    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    points = torch.from_numpy(points).to(DEVICE)
+    N, _ = points.shape
+
+    # 初始化存储采样点索引和最小距离
+    sampled_indices = torch.zeros(num_samples, dtype=torch.long, device=DEVICE)
+    distances = torch.full((N,), float('inf'), dtype=torch.float32, device=DEVICE)  # 记录最小距离
+
+    # 随机选择第一个点
+    first_index = torch.randint(0, N, (1,), device=DEVICE)
+    sampled_indices[0] = first_index
+    farthest = points[first_index].unsqueeze(0)  # (1, 3)
+
+    for i in range(1, num_samples):
+        # 计算所有点到当前选中点的欧式距离
+        dist = torch.cdist(points, farthest, p=2).squeeze(1)  # (N,)
+        distances = torch.minimum(distances, dist)  # 更新最小距离
+        sampled_indices[i] = torch.argmax(distances)  # 选取最远点
+        farthest = points[sampled_indices[i]].unsqueeze(0)  # 更新选点
+
+    return points[sampled_indices].cpu().numpy()
+
+
+
+
+
+
+
+if __name__ == '__main__':
+    pc = np.random.randn(2048, 3)
+    print(pc.shape)
+    current_time = time.time()
+    pc_1024 = farthest_point_sampling_torch_optimized(pc, 1024)
+    print(f'---{time.time() - current_time}---')

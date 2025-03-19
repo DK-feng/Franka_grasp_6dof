@@ -1,0 +1,4 @@
+*tmp
+__pycache__
+*log
+franka_grasp_rl_6dof/UCN/data/checkpoints/seg_resnet34_8s_embedding_cosine_rgbd_add_sampling_epoch_16.checkpoint.pth

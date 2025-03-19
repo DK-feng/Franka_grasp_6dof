@@ -8,8 +8,8 @@ import sys, os
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from franka_grasp_rl_6dof.UCN.lib.fcn.config import cfg
-from franka_grasp_rl_6dof.UCN.lib.utils.mask import visualize_segmentation
+from .config import cfg
+from ..utils.mask import visualize_segmentation
 
 
 def normalize_descriptor(res, stats=None):

@@ -12,12 +12,12 @@ import cv2
 import scipy
 import matplotlib.pyplot as plt
 
-from franka_grasp_rl_6dof.UCN.lib.fcn.config import cfg
-from franka_grasp_rl_6dof.UCN.lib.fcn.test_common import _vis_minibatch_segmentation, _vis_features, _vis_minibatch_segmentation_final
+from .config import cfg
+from .test_common import _vis_minibatch_segmentation, _vis_features, _vis_minibatch_segmentation_final
 from transforms3d.quaternions import mat2quat, quat2mat, qmult
-from franka_grasp_rl_6dof.UCN.lib.utils.mean_shift import mean_shift_smart_init
-from franka_grasp_rl_6dof.UCN.lib.utils.evaluation import multilabel_metrics
-import franka_grasp_rl_6dof.UCN.lib.utils.mask as util_
+from ..utils.mean_shift import mean_shift_smart_init
+from ..utils.evaluation import multilabel_metrics
+from ..utils import mask as util_
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -46,7 +46,6 @@ def clustering_features(features, num_seeds=100):
     height = features.shape[2]
     width = features.shape[3]
     out_label = torch.zeros((features.shape[0], height, width))
-
     # mean shift clustering
     kappa = 20
     selected_pixels = []
@@ -246,12 +245,13 @@ def test_sample(sample, network, network_crop, device, num_objects):
 
     # run network
     features = network(image, label, depth).detach()
+
+    # 0.07S,主要就是这一行
     out_label, selected_pixels = clustering_features(features, num_seeds=num_objects)
 
     if depth is not None:
         # filter labels on zero depth
         out_label = filter_labels_depth(out_label, depth, 0.08)  #过滤小于0.8的深度
-
     #zoom in refinement
     out_label_refined = None
     # if network_crop is not None:

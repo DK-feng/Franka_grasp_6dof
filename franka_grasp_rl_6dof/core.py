@@ -4,17 +4,13 @@ from typing import Optional
 import numpy as np
 import time
 import open3d as o3d
-from franka_grasp_rl_6dof.develop_utils import *
-from franka_grasp_rl_6dof.utils import *
+from .utils.develop_utils import *
+from .utils.utils import *
 import glob
-import os
-import matplotlib.pyplot as plt
-from scipy.io import savemat
-from franka_grasp_rl_6dof.UCN.UCN import UCN
-import cv2
+from .UCN.UCN import UCN
 import torch
 import gymnasium as gym
-
+import os
 
 
 '''
@@ -57,8 +53,8 @@ class Panda(gym.Env):
         self.finger_indices = np.array([9, 10])
         self.joint_forces=np.array([87.0, 87.0, 87.0, 87.0, 12.0, 120.0, 120.0, 170.0, 170.0])
         #self.neutral_joint_values = np.array([0.00, 0.41, 0.00, -1.85, 0.00, 2.26, 0.79, 0.00, 0.00])
-        #self.neutral_joint_values = np.array([0.000, -0.671, -0.000, -2.384, -0.000, 1.880, 0.786, -0.000, 0.000])     # 0.35, 0.4, 10度
-        self.neutral_joint_values = np.array([0.000, -0.441, 0.000, -2.180, 0.000, 1.735, 0.785, -0.000, 0.000])  # 0.4, 0.4, 0度 
+        self.neutral_joint_values = np.array([0.000, -0.671, -0.000, -2.384, -0.000, 1.880, 0.786, -0.000, 0.000])     # 0.35, 0.4, 10度
+        #self.neutral_joint_values = np.array([0.000, -0.441, 0.000, -2.180, 0.000, 1.735, 0.785, -0.000, 0.000])  # 0.4, 0.4, 0度 
 
         # 摄像头参数（模拟 Realsense 摄像头）
         self.camera_width = image_size[0]  # 宽度,列数
@@ -78,7 +74,7 @@ class Panda(gym.Env):
         '''
         return:
             rgb_image:      np.array of shape (camera_height, camera_width, 3), 0-1
-            depth_image:    np.array of shape (camera_height, camera_width, 1)
+            depth_image:    np.array of shape (camera_height, camera_width)
             true_mask:      np.array of shape (camera_height, camera_width)
             mask:           np.array of shape (camera_height, camera_width)
         '''
@@ -93,10 +89,11 @@ class Panda(gym.Env):
 
         self.view_matrix = p.computeViewMatrix(camera_position, target_position, up_vec)
 
-        # rgb_image: [height, width, 4]
-        # depth_image: [height, width]
-        # mask: [height, width]
-        width, height, rgb_image, depth_image, true_mask = p.getCameraImage(self.camera_width, self.camera_height, self.view_matrix, self.projection_matrix, renderer=p.ER_BULLET_HARDWARE_OPENGL)
+
+        if self.rendering:
+            width, height, rgb_image, depth_image, true_mask = p.getCameraImage(self.camera_width, self.camera_height, self.view_matrix, self.projection_matrix, renderer=p.ER_BULLET_HARDWARE_OPENGL)
+        else:
+            width, height, rgb_image, depth_image, true_mask = p.getCameraImage(self.camera_width, self.camera_height, self.view_matrix, self.projection_matrix, renderer=p.ER_TINY_RENDERER)
 
         rgb_image = np.array(rgb_image).reshape((self.camera_height, self.camera_width, 4))[:, :, :3]
         depth_image = np.array(depth_image).reshape((self.camera_height, self.camera_width))
@@ -106,54 +103,93 @@ class Panda(gym.Env):
         depth_image = self.farVal * self.nearVal / (self.farVal - (self.farVal - self.nearVal) * depth_image)
         # depth_image = 2.0 * self.nearVal * self.farVal / (self.farVal + self.nearVal - (2.0 * depth_image - 1.0) * (self.farVal - self.nearVal))
 
-        # depth_image = depth_image[..., np.newaxis] #(480行,640列)即640宽*480高
-        # mask = np.array(mask).reshape((self.camera_height, self.camera_width))
-        # mask = self._process_mask(mask, self.target_object_indice)
 
         rgb_image = rgb_image.astype(np.float32) / 255.0
         depth_image = depth_image.astype(np.float32)
 
-        # analyze_mask(mask) 
-        # time.sleep(1000000)
-        # mask = mask.cpu().numpy().squeeze().astype(np.int16)
-        # analyze_mask(mask) 
-        # time.sleep(1000000)
 
         return rgb_image, depth_image, true_mask
     
     def reset(self):
-        '''
-        resetJointState 只改变状态，不控制电机
-        p.resetJointState 是瞬时地改变关节状态，但它不会同步更新电机控制模式中的目标位置。
-        如果你在仿真步进时仍然用 POSITION_CONTROL 控制，它会尝试回到之前的目标状态。
-        POSITION_CONTROL 会覆盖 resetJointState 的效果
-        如果 p.setJointMotorControlArray 在 reset() 后继续运行，电机会保持之前的目标位置。
-        '''
         self._load_robot()
         self.set_joint_positions(self.neutral_joint_values)
-        for _ in range(5000):
+        for _ in range(500):
             p.stepSimulation()
         self.set_joint_angles_hard(self.neutral_joint_values)
            
-    def set_action(self, action: np.array):
-        # action: postion change of end effector, (dx, dy, dz)
-        target_position = p.getLinkState(self.RobotID, self.ee_link)[0] + action[:3]*0.05
-        if target_position[2] < 0.02:
-            target_position[2] = 0.02
-        target_orientation = p.getEulerFromQuaternion(p.getLinkState(self.RobotID, self.ee_link)[1]) + action[3:6]*0.05
-        target_orientation = p.getQuaternionFromEuler(target_orientation)
-        joint_positions = p.calculateInverseKinematics(self.RobotID,
-                                                        self.ee_link,
-                                                        targetPosition=target_position,
-                                                        targetOrientation=target_orientation)
-        finger_width = self.get_fingers_width()
-        finger_position = finger_width/2 + action[-1]*0.05
-        joint_positions = np.array(joint_positions)
-        joint_positions[-2:] = finger_position
-        self.set_joint_positions(joint_positions)
+    def set_action(self, action: np.array, interpolation_steps=10):
+        """
+        在当前末端状态和目标状态之间插值。
+        interpolation_steps: 插值分成多少步，每步执行一次关节控制 + p.stepSimulation()
+        """
+        touch_floor = False
+        if len(action) == 6:
+            action = np.concatenate([action, [0]])
 
+        # 当前状态
+        current_pos = np.array(p.getLinkState(self.RobotID, self.ee_link)[0])
+        current_ori = np.array(p.getEulerFromQuaternion(p.getLinkState(self.RobotID, self.ee_link)[1]))
+
+        # 目标状态
+        target_pos = current_pos + action[:3] * 0.02
+        # 限制最低高度
+        if target_pos[2] < 0.005:
+            target_pos[2] = 0.005
+            touch_floor = True
+        target_ori = current_ori + action[3:6] * 0.02
+
+
+        # 当前手爪宽度
+        current_finger = self.get_fingers_width() / 2
+        target_finger = current_finger + action[-1] * 0.02
+
+        # 插值步骤
+        for step in range(1, interpolation_steps + 1):
+            ratio = step / interpolation_steps
+
+            # 插值末端位姿（线性插值）
+            interp_pos = (1 - ratio) * current_pos + ratio * target_pos
+            interp_ori_euler = (1 - ratio) * current_ori + ratio * target_ori
+            interp_ori_quat = p.getQuaternionFromEuler(interp_ori_euler)
+
+            # 插值手爪
+            interp_finger = (1 - ratio) * current_finger + ratio * target_finger
+
+            # 求解当前插值状态下的逆解
+            joint_positions = p.calculateInverseKinematics(
+                self.RobotID,
+                self.ee_link,
+                targetPosition=interp_pos,
+                targetOrientation=interp_ori_quat,
+                lowerLimits=[-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973],
+                upperLimits=[2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973],
+                jointRanges=[5.8] * 7,
+                restPoses=self.get_joint_positions(),  # 当前状态作为启发
+                maxNumIterations=100,
+                residualThreshold=1e-4
+            )
+            joint_positions = np.array(joint_positions)
+            
+            # 设置手指
+            joint_positions[-2:] = interp_finger
+
+            zero_velocities = [0.0] * len(self.joint_indices)
+            p.setJointMotorControlArray(self.RobotID,
+                                        jointIndices=self.joint_indices,
+                                        controlMode=p.POSITION_CONTROL,
+                                        targetPositions=joint_positions,
+                                        targetVelocities=zero_velocities,
+                                        forces=self.joint_forces)
+
+            # 仿真步进
+            for _ in range(self.sub_steps):
+                p.stepSimulation()
+
+        return touch_floor
+                
     def _load_robot(self):
-        self.RobotID = p.loadURDF("/home/kaifeng/FYP/franka_grasp_rl_6dof/models/panda_franka/panda_modified.urdf", self.base_position, useFixedBase=True)
+        file_path = os.path.join(os.path.dirname(__file__), "models/panda_franka/panda_modified.urdf")
+        self.RobotID = p.loadURDF(file_path, self.base_position, useFixedBase=True)
         p.changeDynamics(self.RobotID, self.finger_indices[0], lateralFriction=1.0, spinningFriction=0.001)
         p.changeDynamics(self.RobotID, self.finger_indices[1], lateralFriction=1.0, spinningFriction=0.001)
 
@@ -168,7 +204,7 @@ class Panda(gym.Env):
                                     controlMode=p.POSITION_CONTROL,
                                     targetPositions=joint_positions,
                                     forces=self.joint_forces)
-
+        
     def get_joint_positions(self):
         joint_states = p.getJointStates(self.RobotID, self.joint_indices)
         joint_positions = np.array([state[0] for state in joint_states])
@@ -229,7 +265,7 @@ class Task(gym.Env):
                  use_urdf: bool = True):
         self.num_objects = num_objects
         self.objects_IDs = []
-        self.objects_urdf_file_folder = '/home/kaifeng/FYP/franka_grasp_rl_6dof/models/objects'
+        self.objects_urdf_file_folder = os.path.join(os.path.dirname(__file__), "models/objects")
         self.objects_files = np.array([file for file in glob.glob(os.path.join(self.objects_urdf_file_folder,"*"))
                                         if file.split('/')[-1].startswith('0')])
         self.objects_files = sorted(self.objects_files)
@@ -243,15 +279,9 @@ class Task(gym.Env):
         /home/kaifeng/FYP/data/objects/007_tuna_fish_can
         /home/kaifeng/FYP/data/objects/008_pudding_box
         '''
-        self.drop_positions = np.array([0.5, 0, 0.15])  #所有物体从这个高度自由落下形成structure cluster
+        self.drop_positions = np.array([0.55, 0, 0.15])  #所有物体从这个高度自由落下形成structure cluster
 
         print("---Task Initialization: Done---------")
-
-    def is_success(self):
-        """
-        判断任务是否成功
-        """
-        return False
 
     def reset(self):
         """
@@ -283,14 +313,18 @@ class Task(gym.Env):
         return collision or not_on_table
 
     def _load_objs(self):
-        # 随即导入新物体,需要改正，参数仅适用于米老鼠
         objects_IDs = []
         select_objects_paths = np.random.choice(self.objects_files, size=self.num_objects, replace=False)
         if self.use_urdf:
             for file_path in select_objects_paths:
-                position = self.drop_positions + np.array([np.random.uniform(-0.1, 0.1),
-                                                np.random.uniform(-0.1, 0.1),
-                                                0])
+                if self.num_objects == 1:
+                    position = self.drop_positions + np.array([np.random.uniform(-0.05, 0.05),
+                                                    np.random.uniform(-0.05, 0.05),
+                                                    0])
+                else:
+                    position = self.drop_positions + np.array([np.random.uniform(-0.1, 0.1),
+                                                    np.random.uniform(-0.1, 0.1),
+                                                    0])                    
                 orientation = np.random.rand(4)
                 obj_id = p.loadURDF(os.path.join(file_path,'model_normalized.urdf'),
                     basePosition = position,
@@ -321,79 +355,24 @@ class Task(gym.Env):
             self.select_objects_paths = np.array(select_objects_paths)
             for _ in range(5000):
                 p.stepSimulation()
-
             return objects_IDs
         
-
-
         else:
-            for obj_file in select_objects_paths:
-                obj_id = self._load_obj(os.path.join(file_path,'model_normalized.obj'),
-                                        self.drop_positions,
-                                        np.random.rand(4), mesh_scale=[1,1,1])
-                print('------Loading Object:{}---ID:{}---'.format(obj_file.split('/')[-1], obj_id))
-                for _ in range(1000):
-                    p.stepSimulation()
-                objects_IDs.append(obj_id)
-            self.select_objects_paths = np.array(select_objects_paths)
-            for _ in range(5000):
-                p.stepSimulation()
-            return objects_IDs
-
-    def get_objects_info(self, target_object_id):
-        '''返回所加载物体的path以及pose,为制作.mat文件调用'''
-        poses = []
-        sorted_path = sorted(self.select_objects_paths)
-        for path in sorted_path:
-            obj_id = self.objects_IDs[list(self.select_objects_paths).index(path)]
-            info = p.getBasePositionAndOrientation(obj_id)
-            position = np.array(info[0])
-            rotation_matrix = np.array(p.getMatrixFromQuaternion(info[1])).reshape(3,3)
-            pose = np.eye(4)
-            pose[:3, :3] = rotation_matrix
-            pose[:3, 3] = position
-            poses.append(pose)
-        poses = np.array(poses)
-        target_object_path = self.select_objects_paths[self.objects_IDs.index(target_object_id)]
-        select_objects_index = np.array(sorted([self.objects_files.index(path) for path in self.select_objects_paths]))
-        path = sorted(["/".join(p.split("/")[-3:]) for p in self.select_objects_paths])
-        target_path = np.array(target_object_path.split("/")[-1])
-
-        return path, poses, target_path, select_objects_index
-
-    def _load_obj(self, obj_path, obj_position, obj_orientation, mesh_scale):
-        '''导入.obj文件'''
-        visual_shape_id = p.createVisualShape(
-        shapeType=p.GEOM_MESH,
-        fileName=obj_path,
-        visualFramePosition=[0,0,0],
-        meshScale=mesh_scale)
-
-        collision_shape_id = p.createCollisionShape(
-        shapeType=p.GEOM_MESH,
-        fileName=obj_path,
-        collisionFramePosition=[0,0,0],
-        meshScale=mesh_scale)
-
-        objectId = p.createMultiBody(
-            baseMass=1, #质量(kg),0表示固定物体
-            baseCollisionShapeIndex=collision_shape_id,
-            baseVisualShapeIndex=visual_shape_id,
-            basePosition=obj_position,
-            baseOrientation=obj_orientation, #四元数
-            useMaximalCoordinates=True)
-        
-        return objectId
-
-
+            print("ONLY SUPPORT URDF FILE")
+            time.sleep(10000)
 
 
 class RobotTaskEnv(gym.Env):
+    metadata = {
+        "render_modes": ["human", "rgb_array"],
+        "render_fps": 60
+    }
+
     # Main environment class
     def __init__(
                     self, 
                     render_mode: str='human',
-                    num_objects: int=3,
+                    num_objects: int=1,
                     background_color : Optional[np.array] = None,
                     timestep = 1/500,
                     sub_steps: int=20,
@@ -404,12 +383,14 @@ class RobotTaskEnv(gym.Env):
                     fixed_num_points: int = 1024,
                     split: float = 0.5,
                     plane_points: int = 0,
-                    points_per_frame: int = 512
+                    points_per_frame: int = 512,
+                    total_step: int = 30
                     ) -> None:
 
         background_color = background_color if background_color is not None else np.array([223.0, 54.0, 45.0])
         self.background_color = background_color.astype(np.float32) / 255
-        self.render = True if render_mode == 'human' else False
+        self.rendering = True if render_mode == 'human' else False
+        self.render_mode = render_mode
         self.timestep = timestep
         self.sub_steps = sub_steps 
         self.time_sleep = time_sleep
@@ -419,19 +400,20 @@ class RobotTaskEnv(gym.Env):
         self.split = split if num_objects > 1 else 1
         self.points_per_frame = points_per_frame
         self.plane_points = plane_points
+        self.total_step = total_step
 
         self.return_plane_points = False if plane_points == 0 else True
 
         self._pt_accumulate_ratio = pt_accumulate_ratio
         self._fixed_num_points = fixed_num_points
 
-        self.exist_obstacal = True if self.num_objects > 2 else False
+        self.exist_obstacal = True if self.num_objects > 1 else False
 
         # connect to server
         options = "--background_color_red={} --background_color_green={} --background_color_blue={} --opengl3".format(
             *self.background_color
         )
-        if self.render:
+        if self.rendering:
             p.connect(p.GUI, options=options)
         else:
             p.connect(p.DIRECT) 
@@ -444,8 +426,6 @@ class RobotTaskEnv(gym.Env):
 
         # Segementation Network
         self.UCN = UCN(self.camera_intrinsic)
-
-
 
 
         # Obs
@@ -461,14 +441,14 @@ class RobotTaskEnv(gym.Env):
         self.observation_space = spaces.Dict(
             dict(
                 all_PC=spaces.Box(-1.0, 1.0, shape=all_pc_shape, dtype=all_pc_dtype),
-                joint_state=spaces.Box(-2.0, 2.0, shape=joint_state_shape, dtype=joint_state_dtype), 
-                ee_state=spaces.Box(-2.0, 2.0, shape=ee_state_shape, dtype=ee_state_dtype),
-                timestep=spaces.Discrete(50)))
+                joint_state=spaces.Box(-4.0, 4.0, shape=joint_state_shape, dtype=joint_state_dtype), 
+                ee_state=spaces.Box(-4.0, 4.0, shape=ee_state_shape, dtype=ee_state_dtype),
+                timestep=spaces.Discrete(total_step)))
 
-        # 6D action space: [dx, dy, dz, d_roll, d_pitch, d_yaw, claw_action]
+        # 6D action space: [dx, dy, dz, d_roll, d_pitch, d_yaw]
         self.action_space = spaces.Box(
-            low=np.array([-1, -1, -1, -np.pi/3, -np.pi/3, -np.pi/3, -0.1]),
-            high=np.array([1, 1, 1, np.pi/3, np.pi/3, np.pi/3, 0.1]),
+            low=np.array([-1, -1, -1, -np.pi, -np.pi, -np.pi]),
+            high=np.array([1, 1, 1, np.pi, np.pi, np.pi]),
             dtype=np.float32)
 
 
@@ -479,77 +459,76 @@ class RobotTaskEnv(gym.Env):
         print("---RobotTaskEnv Initialization: Done---------")
 
     def _get_obs(self):
-        # 捕获初始摄像头点云并累计 0.03S
+        # 捕获初始摄像头点云并累计 0.02S
+        
         rgb_image, depth_image, true_mask = self.robot.render_from_camera()
-
-        # 从UCN得到mask, 0.14S
+        
+        # 从UCN得到mask，0.085S
         with torch.no_grad():
             mask, _ = self.UCN.get_mask(rgb_image,
                                         depth_image,
                                         num_objects=self.num_objects + 1)  #别忘了加上桌面
         mask = mask.cpu().numpy().squeeze()
         #analyze_mask(mask)
-
-        # 第一次时采用mask中面积最大的value除去背景,目标物体设置为0,所有障碍物设置为1,桌面和背景设置为50, 0.1S
+        
+        # 0.03S
+        # 第一次时采用mask中面积最大的value除去背景,目标物体设置为0,所有障碍物设置为1,桌面和背景设置为50
         if self._env_step == 0:
             target_mask_value = get_target_obj_from_mask(mask)
             mask = process_mask(mask, target_mask_value)
-
         else:
             mask = self._modify_mask(mask, depth_image)
-
+        self.mask = mask
+        
         # analyze_mask(mask)
         # 得到选择的抓取物体的正确ID,几乎0S
         if self._env_step == 0:
             self.target_object_ID = self._get_target_object_ID(mask, true_mask)
 
-        # [N, 3], 从depth_image里生成基于camera frame的目标物体的point_cloud, 0.03S
+        # [N, 3], 从depth_image里生成基于camera frame的目标物体的point_cloud, 0.02S
         target_points, obstacal_points, plane_points = self._generate_pc_from_depth(depth_image, mask)
-
-        print(target_points.shape)
-        # [N, 3], 将pc转换到world frame下
+        
+        # [N, 3], 将pc转换到world frame下，几乎0S
+        
         target_points_worldframe = self._camera_to_world(target_points)
         obstacal_points_worldframe = self._camera_to_world(obstacal_points)
         plane_points_worldframe = self._camera_to_world(plane_points)
-        print(target_points_worldframe.shape)
+        
 
-        print(self.curr_acc_target_points.shape)
-        # [N + new points, 3], 先转换为世界坐标系下再累积
+        # [N + new points, 3], 先转换为世界坐标系下再累积，0S
         self.update_curr_acc_target_points(target_points_worldframe)
         if self.exist_obstacal:
             self.update_curr_acc_obstacal_points(obstacal_points_worldframe)
         if self.return_plane_points:
             self.update_curr_acc_plane_points(plane_points_worldframe)
+        
 
-        print(self.curr_acc_target_points.shape)
-        timer = Timer()
-        # 向上/下采样为固定点数，0.2S
+        # 向上/下采样为固定点数，0.2S,优化后0.06S
         self.curr_acc_target_points = regularize_pc_point_count(self.curr_acc_target_points, self._fixed_num_points * self.split, use_farthest_point=True)
-        print(timer.record_and_reset())
+
         if self.exist_obstacal:
             self.curr_acc_obstacal_points = regularize_pc_point_count(self.curr_acc_obstacal_points, self._fixed_num_points * (1-self.split) - self.plane_points, use_farthest_point=True)
         if self.return_plane_points:
             self.curr_acc_plane_points = regularize_pc_point_count(self.curr_acc_plane_points, self.plane_points, use_farthest_point=True)
-        print(self.curr_acc_target_points.shape)
 
-        # 所有的点云,将target的点云上移5cm,其它点云下降5cm以区分,同时归一化处理
+        # 所有的点云,将target的点云上移5cm,其它点云下降5cm以区分,同时归一化处理，0S
         all_PC = normalize_point_cloud(np.concatenate([self.curr_acc_target_points+np.array([0,0,0.05]),
                                         self.curr_acc_obstacal_points+np.array([0,0,-0.05]),
                                         self.curr_acc_plane_points+np.array([0,0,-0.05])], axis=0))
 
-        ee_state = np.concatenate((self.robot.get_ee_position(), self.robot.get_ee_euler(), [self.robot.get_fingers_width()/2]))
+        ee_state = np.concatenate((self.robot.get_ee_position(), self.robot.get_ee_euler()))
 
         obs = { 'all_PC': all_PC, #处理后的所有点云合并在一起
                 #'target_PC': self.curr_acc_target_points,  # (fixed_num_points * split, 3)
                 #'obstacal_PC': self.curr_acc_obstacal_points,  # (fixed_num_points * (1-split) - plane_points, 3)
                 #'plane_PC': self.curr_acc_plane_points,  # (plane_points, 3)
-                'timestep': self._env_step,  # 1~50
+                'timestep': self._env_step,  # 0~29
                 'joint_state': self.robot.get_joint_positions()[:7],    # (7,)
-                'ee_state': ee_state}  # (x, y, z, rx, ry, rz, finger_width/2)
+                'ee_state': ee_state}  # (x, y, z, rx, ry, rz)
 
         return obs
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         """
         重置仿真：重置 PyBullet 环境、重新加载平面、机械臂和任务场景，
         并清空累计点云数据，返回初始 observation。
@@ -571,13 +550,15 @@ class RobotTaskEnv(gym.Env):
             os.remove(file)
 
         # task 与 robot 通讯
+        self.robot.sub_steps = self.sub_steps
+        self.robot.rendering = self.rendering
 
         # reset后清空累积点云
         self.curr_acc_target_points = np.zeros([0, 3])
         self.curr_acc_obstacal_points = np.zeros([0, 3])
         self.curr_acc_plane_points = np.zeros([0, 3])
         self._env_step = 0
-
+        
         obs = self._get_obs()
 
         info = {'env_step': self._env_step}
@@ -589,7 +570,7 @@ class RobotTaskEnv(gym.Env):
         执行一个动作，返回 observation, reward, done, info
         """
         # 0.02S
-        self.robot.set_action(action)
+        touch_floor = self.robot.set_action(action, interpolation_steps=20)
         for _ in range(self.sub_steps):
             p.stepSimulation()
             if self.time_sleep:
@@ -597,31 +578,80 @@ class RobotTaskEnv(gym.Env):
 
         self._env_step += 1
 
-        truncated = bool(self._env_step > 50)
-        terminated = bool(self._get_target_obj_height() > 0.2)  # 目标物体高度大于20cm则成功
+        truncated = bool(self._env_step >= self.total_step)
 
-        # 0.4S
+        # 0.24S / 0.275S
         obs = self._get_obs()
 
+        # 如果末端执行器与点云中最近的点距离小于10cm则terminated
+        terminated, try_grasp = self._check_terminated()
+        terminated = terminated or touch_floor
+
+        if try_grasp:
+            # 接近
+            grasp_action1 = 0.115 * self.robot.get_camera_rotation_matrix().dot(np.array((0, 0, -1)))
+            grasp_action1 = np.concatenate([grasp_action1*50, np.array([0, 0, 0, 0.04*50])])
+            self.robot.set_action(grasp_action1, 100)
+            for _ in range(self.sub_steps):
+                p.stepSimulation()
+                time.sleep(1/500)
+            # 抓取
+            grasp_action2 = np.array([0, 0, 0, 0, 0, 0, -0.04*50])
+            self.robot.set_action(grasp_action2, 10)
+            for _ in range(self.sub_steps):
+                p.stepSimulation()
+                time.sleep(1/500)
+            # 提升
+            grasp_action3 = np.array([0, 0, 0.2*50, 0, 0, 0, -0.1])
+            self.robot.set_action(grasp_action3, 100)
+            for _ in range(self.sub_steps):
+                p.stepSimulation()
+                time.sleep(1/500)
 
         reward = self.compute_reward()
         info = {'env_step': self._env_step}
 
         return obs, reward, terminated, truncated, info
 
-    def get_expert_actions(self):
-        self._generate_mat_file()
-        position_array = self._contact_expert()
-        return position_array
-
     def compute_reward(self):
         # 目标物体高度大于20cm则成功
-        height = self._get_target_obj_height()
-        return -np.array(height > 0.2, dtype=np.float32)
+        reward = self._get_grasp_reward() + 2*self._get_distance_reward() + self._get_track_reward()
+        return reward
 
     def close(self):
         p.disconnect()
 
+
+
+    def _check_terminated(self):
+        ee_position = self.robot.get_ee_position()
+        terminated = True if ee_position[0] < 0.2 or ee_position[1] < -0.5 or ee_position[1] > 0.5 or ee_position[2] > 0.8 else False
+
+        l2_distance = np.linalg.norm(ee_position - self.curr_acc_target_points, axis=1)
+        try_grasp =  True if l2_distance.min() < 0.1 else False
+        terminated = True if try_grasp else False
+        return terminated, try_grasp
+
+    def _get_grasp_reward(self):
+        # 抓取成功reward为5,失败为-1
+        height = self._get_target_obj_position()[2]
+        reward = 2.0 if height > 0.1 else -1.0
+        return reward
+
+    def _get_distance_reward(self):
+        # 小于0.1reward为0,大于时为距离的负数
+        ee_position = self.robot.get_ee_position()
+        target_position = self._get_target_obj_position()
+        l2_distance = np.linalg.norm(ee_position - self.curr_acc_target_points, axis=1)
+        center_dis = np.linalg.norm(ee_position - target_position)
+        reward = 0.0 if l2_distance.min() < 0.1 else -(0.5*center_dis + 0.5*l2_distance.min())
+        return reward
+
+    def _get_track_reward(self):
+        # 处理后的mask需要包含至少50个目标物体的像素点
+        target_value_count = np.count_nonzero(self.mask == 0)
+        reward = -1.0 if target_value_count < 50 else 0.0
+        return reward
 
     def save_state(self):
         state_id = p.saveState()
@@ -632,9 +662,6 @@ class RobotTaskEnv(gym.Env):
 
     def remove_state(self, state_id):
         p.removeState(state_id)
-
-    def close(self):
-        p.disconnect()
 
     def render(
         self,
@@ -701,8 +728,8 @@ class RobotTaskEnv(gym.Env):
                 cameraTargetPosition=render_target_position if render_target_position is not None else [0, 0, 0]
             )
 
-    def _get_target_obj_height(self):
-        return p.getBasePositionAndOrientation(self.target_object_ID)[0][2]
+    def _get_target_obj_position(self):
+        return p.getBasePositionAndOrientation(self.target_object_ID)[0]
 
     def _create_scene(self):
         self.PlaneID = p.loadURDF("/home/kaifeng/FYP/franka_grasp_rl_6dof/models/sense_file/floor/model_normalized.urdf", basePosition=[0,0,-0.5])
@@ -882,30 +909,6 @@ class RobotTaskEnv(gym.Env):
         self.curr_acc_plane_points = np.concatenate(
             (new_points[index, :], self.curr_acc_plane_points), axis=0)  
 
-    def step_expert(self, joint_positions):
-        """
-        执行一个动作，返回 observation, reward, done, info
-        """
-        current_state = np.concatenate((self.robot.get_ee_position(), self.robot.get_ee_euler(), [self.robot.get_fingers_width()/2]))
-        
-        self.robot.set_joint_positions(joint_positions)
-        for _ in range(self.sub_steps):
-            p.stepSimulation()
-            if self.time_sleep:
-                time.sleep(self.timestep)
-
-        target_states = np.concatenate((self.robot.get_ee_position(), self.robot.get_ee_euler(), [self.robot.get_fingers_width()/2]))
-        expert_action = target_states - current_state
-
-        self._env_step += 1
-        obs = self._get_obs()
-        reward = self.compute_reward()
-
-        truncated = bool(self._env_step > 50)
-        terminated = bool(self._get_target_obj_height() > 0.2)
-
-        return obs, reward, terminated, truncated, {}, expert_action
-
     def visualize_point_cloud(self, point_clouds=None):
         # 可视化点云
         if point_clouds is None:
@@ -960,146 +963,16 @@ class RobotTaskEnv(gym.Env):
             window_name="Point Cloud with Multiple Coordinate Frames",
             width=1280, height=960)
 
-    def _generate_mat_file(self):    
-        '''
-        path: (num,), 只写
-        pose: (num, 4, 4), trans = pose[:3, 3], orn = pose[:3, :3]
-        states: (joint_states, 0, ee_states) -> shape(1,10)
-        target_name: 是path里的一部分
-        used_objects_index: 所是用的物体的path在sorted_all_paths里的index
-        '''
-        path, pose, target_path, used_objects_index = self.task.get_objects_info(target_object_id=self.target_object_ID)
-        states = np.insert(self.robot.neutral_joint_values, 7, 0)
-        mat_data = {
-            "path": path,
-            "pose": pose,
-            "states": states,
-            "target_name": target_path,
-            "used_objects_index": used_objects_index
-        }
-        savemat("/home/kaifeng/FYP/docker_shared/sence_data.mat", mat_data)
-        # savemat("/home/kaifeng/FYP/backup/sence_data.mat", mat_data)
-        # print(states.flatten())
-        # print(path)
-        # print(pose.shape)
-        # print(used_objects_index.flatten())
-        # print(target_path.flatten())
-        # print(target_path[0])
-        # time.sleep(1000000)
-
-    def _contact_expert(self):
-        '''不断检测共享文件夹,检测是否获得专家经验'''
-        while True:
-            files = glob.glob(os.path.join('/home/kaifeng/FYP/docker_shared',"*"))
-            output_file = [file for file in files if 'output.mat' in file]
-            if len(output_file) != 0:
-                print('---Successfully Get Expert Data------')
-                break
-            time.sleep(1)
-            print("---Waiting for Expert---")
-
-        with open(output_file[0], "r") as file:
-            lines = file.readlines()
-            steps = lines[-53:-3]
-            data_list = [np.fromstring(row.strip("[]"), sep=" ") for row in steps]
-            data_array = np.array(data_list)
-
-        os.remove(output_file[0])
-
-        return data_array
-
+    def close(self):
+        p.disconnect()
 
 
 
 if __name__ == "__main__":
 
-    '''
-    env.PlaneID         : 0
-    env.TableID         : 1
-    env.robot.RobotID   : 2
-    env.task.object_ids : [3, 4, ......]
-    '''
-
-    timer = Timer()
-
-    env = RobotTaskEnv(render_mode='human',
-                       time_sleep=False,
-                       fixed_num_points=1024,
-                       split = 0.5,
-                       plane_points=0,
-                       points_per_frame=256,
-                       sub_steps=50,
-                       debug_visulization=True,
-                       num_objects=1,
-                       )
-    timer.reset()
-    # 0.4S一个loop
-    for i in range(1000000):
-        print('\n---Step:{}---'.format(env._env_step))
-        action = env.action_space.sample()
-        # action[1] = 0
-        # action[3] = 0
-        # action[4] = 0
-        # action[5] = 0
-        # action = np.array([0, 0.3, 0, 0, 0, 0, 0])
-        # action = np.array([0.3, 0, 0, 0, 0, 0, 0])
-        obs, reward, terminated, truncated, info = env.step(action)
-        if i % 5 == 0:
-            env.visualize_point_cloud()
-        # for key in obs.keys():
-        #     print(f"---key:{key}---shape:{obs[key].shape if isinstance(obs[key], np.ndarray) else obs[key]}---")
-        #     time.sleep(5)
-
-        #env.visualize_point_cloud(obs['all_PC'])
-        #env.visualize_point_cloud()
-
-        if terminated or truncated:
-            env.reset()
-        print('---Time Cost:{}---'.format(timer.record_and_reset()))
-            
-    p.disconnect()
+    print(os.path.join(os.path.dirname(__file__), "models/panda_franka/panda_modified.urdf"))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # timer = Timer()
-
-    # env = RobotTaskEnv(render=True,
-    #                    time_sleep=False,
-    #                    fixed_num_points=1024,
-    #                    split = 0.5,
-    #                    plane_points=100,
-    #                    points_per_frame=256,
-    #                    sub_steps=50,
-    #                    debug_visulization=True
-    #                    )
-    # obs = env.reset()
-    # time.sleep(1)
-
-    # for _ in range(1000000):
-    #     expert_actions = env.get_expert_actions()
-
-    #     for i in range(expert_actions.shape[0]):
-    #         print('\n---Step:{}---'.format(env._env_step))
-    #         obs, reward, terminated, truncated, info, expert_action = env.step_expert(expert_actions[i])
-    #         print(reward,expert_action,'\n')
-
-    #     env.visualize_point_cloud()
-    #     env.reset()
-        
-
-    # p.disconnect()
 
 
 

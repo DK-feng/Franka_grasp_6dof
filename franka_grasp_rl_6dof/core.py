@@ -13,14 +13,6 @@ import gymnasium as gym
 import os
 
 
-'''
-        删除重新载入物体会有视觉残留   :已解决    
-        y轴方向的运动会导致点云错位发生,不知道原因
-        机械臂的初始位置是否正确,摄像头位置是否正确
-        需要修改_modify_mask函数   :已解决   
-
-'''
-
 
 class Timer:
     def __init__(self):
@@ -68,7 +60,7 @@ class Panda(gym.Env):
         self.projection_matrix = p.computeProjectionMatrixFOV(self.fov, self.aspect_ratio, self.nearVal, self.farVal)
         self.camera_intrinsic = self.get_camera_intrinsic()
 
-        print("---Robot Initialization: Done---------")
+        # print("---Robot Initialization: Done---------")
 
     def render_from_camera(self):
         '''
@@ -89,10 +81,13 @@ class Panda(gym.Env):
 
         self.view_matrix = p.computeViewMatrix(camera_position, target_position, up_vec)
 
-
         if self.rendering:
             width, height, rgb_image, depth_image, true_mask = p.getCameraImage(self.camera_width, self.camera_height, self.view_matrix, self.projection_matrix, renderer=p.ER_BULLET_HARDWARE_OPENGL)
         else:
+            print(self.view_matrix)
+            print(self.projection_matrix)
+            print(self.camera_width)
+            print(self.camera_height)
             width, height, rgb_image, depth_image, true_mask = p.getCameraImage(self.camera_width, self.camera_height, self.view_matrix, self.projection_matrix, renderer=p.ER_TINY_RENDERER)
 
         rgb_image = np.array(rgb_image).reshape((self.camera_height, self.camera_width, 4))[:, :, :3]
@@ -257,7 +252,6 @@ class Panda(gym.Env):
 
 
 
-
 class Task(gym.Env):
     # task class
     def __init__(self,
@@ -281,7 +275,7 @@ class Task(gym.Env):
         '''
         self.drop_positions = np.array([0.55, 0, 0.15])  #所有物体从这个高度自由落下形成structure cluster
 
-        print("---Task Initialization: Done---------")
+        # print("---Task Initialization: Done---------")
 
     def reset(self):
         """
@@ -350,7 +344,7 @@ class Task(gym.Env):
                         break
 
 
-            print('------Loading Object:{}---ID:{}---'.format(file_path.split('/')[-1], obj_id))
+            # print('------Loading Object:{}---ID:{}---'.format(file_path.split('/')[-1], obj_id))
 
             self.select_objects_paths = np.array(select_objects_paths)
             for _ in range(5000):
@@ -360,6 +354,7 @@ class Task(gym.Env):
         else:
             print("ONLY SUPPORT URDF FILE")
             time.sleep(10000)
+
 
 
 class RobotTaskEnv(gym.Env):
@@ -456,7 +451,7 @@ class RobotTaskEnv(gym.Env):
         self._place_visualizer()
         p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
 
-        print("---RobotTaskEnv Initialization: Done---------")
+        # print("---RobotTaskEnv Initialization: Done---------")
 
     def _get_obs(self):
         # 捕获初始摄像头点云并累计 0.02S
@@ -486,21 +481,26 @@ class RobotTaskEnv(gym.Env):
             self.target_object_ID = self._get_target_object_ID(mask, true_mask)
 
         # [N, 3], 从depth_image里生成基于camera frame的目标物体的point_cloud, 0.02S
-        target_points, obstacal_points, plane_points = self._generate_pc_from_depth(depth_image, mask)
+        if self.exist_obstacal:
+            target_points, obstacal_points, plane_points = self._generate_pc_from_depth(depth_image, mask)
+        else:
+            target_points = self._generate_pc_from_depth(depth_image, mask, return_obstacal_and_plane=False)
         
         # [N, 3], 将pc转换到world frame下，几乎0S
         
         target_points_worldframe = self._camera_to_world(target_points)
-        obstacal_points_worldframe = self._camera_to_world(obstacal_points)
-        plane_points_worldframe = self._camera_to_world(plane_points)
+        if self.exist_obstacal:
+            obstacal_points_worldframe = self._camera_to_world(obstacal_points)
+            if self.return_plane_points:
+                plane_points_worldframe = self._camera_to_world(plane_points)
         
 
         # [N + new points, 3], 先转换为世界坐标系下再累积，0S
         self.update_curr_acc_target_points(target_points_worldframe)
         if self.exist_obstacal:
             self.update_curr_acc_obstacal_points(obstacal_points_worldframe)
-        if self.return_plane_points:
-            self.update_curr_acc_plane_points(plane_points_worldframe)
+            if self.return_plane_points:
+                self.update_curr_acc_plane_points(plane_points_worldframe)
         
 
         # 向上/下采样为固定点数，0.2S,优化后0.06S
@@ -508,8 +508,8 @@ class RobotTaskEnv(gym.Env):
 
         if self.exist_obstacal:
             self.curr_acc_obstacal_points = regularize_pc_point_count(self.curr_acc_obstacal_points, self._fixed_num_points * (1-self.split) - self.plane_points, use_farthest_point=True)
-        if self.return_plane_points:
-            self.curr_acc_plane_points = regularize_pc_point_count(self.curr_acc_plane_points, self.plane_points, use_farthest_point=True)
+            if self.return_plane_points:
+                self.curr_acc_plane_points = regularize_pc_point_count(self.curr_acc_plane_points, self.plane_points, use_farthest_point=True)
 
         # 所有的点云,将target的点云上移5cm,其它点云下降5cm以区分,同时归一化处理，0S
         all_PC = normalize_point_cloud(np.concatenate([self.curr_acc_target_points+np.array([0,0,0.05]),
@@ -536,13 +536,13 @@ class RobotTaskEnv(gym.Env):
         timer = Timer()
         p.resetSimulation()
         self._reset_pybullet()
-        print('\n---Reset Pybullet: Done--- time cost:{:.3f}---'.format(timer.record_and_reset()))
+        #print('\n---Reset Pybullet: Done--- time cost:{:.3f}---'.format(timer.record_and_reset()))
         self._create_scene()
-        print('---Create Scene: Done--- time cost:{:.3f}---'.format(timer.record_and_reset()))
+        #print('---Create Scene: Done--- time cost:{:.3f}---'.format(timer.record_and_reset()))
         self.robot.reset()
-        print('---Load Robot: Done--- time cost:{:.3f}---'.format(timer.record_and_reset()))
+        #print('---Load Robot: Done--- time cost:{:.3f}---'.format(timer.record_and_reset()))
         self.task.reset()
-        print('---Load Objects: Done--- time cost:{:.3f}---'.format(timer.record_and_reset()))
+        #('---Load Objects: Done--- time cost:{:.3f}---'.format(timer.record_and_reset()))
 
         # 清空共享文件夹
         files = glob.glob(os.path.join('/home/kaifeng/FYP/docker_shared',"*"))
@@ -587,7 +587,7 @@ class RobotTaskEnv(gym.Env):
         terminated, try_grasp = self._check_terminated()
         terminated = terminated or touch_floor
 
-        if try_grasp:
+        if try_grasp and not touch_floor:
             # 接近
             grasp_action1 = 0.115 * self.robot.get_camera_rotation_matrix().dot(np.array((0, 0, -1)))
             grasp_action1 = np.concatenate([grasp_action1*50, np.array([0, 0, 0, 0.04*50])])
@@ -690,7 +690,7 @@ class RobotTaskEnv(gym.Env):
         Returns:
             RGB np.ndarray or None: An RGB array if mode is 'rgb_array', else None.
         """
-        if self.render_mode == "rgb_array" or 'human':
+        if self.render_mode in ["rgb_array", "human"]:
             target_position = target_position if target_position is not None else np.zeros(3)
             view_matrix = p.computeViewMatrixFromYawPitchRoll(
                 cameraTargetPosition=target_position,
@@ -720,7 +720,7 @@ class RobotTaskEnv(gym.Env):
                             render_yaw: float = 45,
                             render_pitch: float = -30,
                             render_target_position: Optional[np.ndarray] = None):
-        if self.render:
+        if self.rendering:
             p.resetDebugVisualizerCamera(
                 cameraDistance=render_distance,
                 cameraYaw=render_yaw,
@@ -825,7 +825,7 @@ class RobotTaskEnv(gym.Env):
 
             plane_points = plane_points.reshape(-1, 3)
             if plane_points.shape[0] != 0:
-                plane_points_indexes = np.random.choice(range(plane_points.shape[0]), size=self.points_per_frame//2, replace=(plane_points.shape[0] < self.points_per_frame//2))
+                plane_points_indexes = np.random.choice(range(plane_points.shape[0]), size=self.points_per_frame, replace=(plane_points.shape[0] < self.points_per_frame//2))
                 plane_points = plane_points[plane_points_indexes,:]
 
             return target_points, obstacal_points, plane_points
@@ -833,7 +833,7 @@ class RobotTaskEnv(gym.Env):
         # 只返回target的点云
         else:
             if target_points.shape[0] != 0:
-                points_indexes = np.random.choice(range(target_points.shape[0]), size=2 * self.points_per_frame, replace=(target_points.shape[0] < 2 * self.points_per_frame))
+                points_indexes = np.random.choice(range(target_points.shape[0]), size=self.points_per_frame, replace=(target_points.shape[0] < 2 * self.points_per_frame))
                 target_points = target_points[points_indexes,:]
             return target_points
 
@@ -963,15 +963,10 @@ class RobotTaskEnv(gym.Env):
             window_name="Point Cloud with Multiple Coordinate Frames",
             width=1280, height=960)
 
-    def close(self):
-        p.disconnect()
-
-
 
 if __name__ == "__main__":
 
     print(os.path.join(os.path.dirname(__file__), "models/panda_franka/panda_modified.urdf"))
-
 
 
 

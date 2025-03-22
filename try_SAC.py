@@ -2,26 +2,40 @@ import franka_grasp_rl_6dof
 import gymnasium as gym
 import time
 from franka_grasp_rl_6dof.Extractor.Extractor import CustomCombinedExtractor
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecVideoRecorder
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3 import SAC, HerReplayBuffer
 from stable_baselines3.common.logger import configure
+from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 from datetime import datetime
-
+import os
 
 
 if __name__ == '__main__':
 
+    # 记录地址
+    prefix = "test_sac"
+    timestamp = datetime.now().strftime("%H_%M_%d")
+    experiment_name = f"{prefix}_{timestamp}"
+    log_root = f"./logs/{experiment_name}"
+    os.makedirs(log_root, exist_ok=True)
+
     env_id = 'FrankaGrasp6Dof-v0'
-    num_cpu = 4
+    num_cpu = 2
+
+    # 训练环境
     env = make_vec_env(env_id, n_envs=num_cpu, seed=0, vec_env_cls=SubprocVecEnv,
                         env_kwargs={"num_objects": 1,
                                     "render_mode": 'human'})
+    
+    # 评估环境
+    eval_env = DummyVecEnv([lambda: gym.make(env_id, num_objects=1, render_mode='human')])
+    eval_env.recording = False 
 
-
-    model = SAC(policy="MultiInputPolicy",env=env, batch_size=1024, gamma=0.95, learning_rate=1e-4, verbose=1, 
-            train_freq=32, gradient_steps=32, tau=0.05, tensorboard_log="./tmp", learning_starts=1500,
-            buffer_size=50000, replay_buffer_class=HerReplayBuffer, device="cuda:0", seed=0,
+    # SAC + HER 配置
+    model = SAC(policy="MultiInputPolicy",env=env, batch_size=512, gamma=0.98, learning_rate=1e-4, verbose=1, 
+            train_freq=4, gradient_steps=4, tau=0.05, tensorboard_log=f"{log_root}/tensorboard", learning_starts=2000,
+            buffer_size=30000, replay_buffer_class=HerReplayBuffer, device="cuda:0", seed=0,
             # Parameters for HER    
             replay_buffer_kwargs=dict(n_sampled_goal=4, goal_selection_strategy="future"),
             # Parameters for SAC
@@ -32,15 +46,43 @@ if __name__ == '__main__':
                 n_critics=2)
             )
 
-    # print(model.policy)
-    # time.sleep(10000)
 
-    prefix = "test_sac"
-    tmp_path = "./tmp/"+datetime.now().strftime(prefix + "_%H_%M_%d")
-    # set up logger
-    new_logger = configure(tmp_path, ["stdout", "csv", "tensorboard"])
+    # # 视频录制配置
+    # video_folder = f'{log_root}/videos/'
+    # os.makedirs(video_folder, exist_ok=True)
+
+    # eval_env = VecVideoRecorder(
+    #     eval_env,
+    #     video_folder,
+    #     record_video_trigger=lambda x: x % 4000 == 0,
+    #     video_length=60,    # 两个episode
+    #     name_prefix="6dof_eval")
+
+    # logger
+    new_logger = configure(log_root, ["stdout", "csv", "tensorboard"])
     model.set_logger(new_logger)
-    model.learn(total_timesteps=700_000, progress_bar=True)
-    model.save(prefix + "_model")
+
+    # Callbacks, 每eval_freq次与环境交互后切换到eval_env，每save_freq次交互后自动保存
+    eval_callback = EvalCallback(
+        eval_env=eval_env,
+        best_model_save_path=f"{log_root}/best_model/",
+        log_path=f"{log_root}/results/",
+        eval_freq=4000,
+        n_eval_episodes=5,
+        deterministic=True,
+        render=False
+    )
+
+    checkpoint_callback = CheckpointCallback(
+        save_freq=10000,
+        save_path=f'{log_root}/checkpoints/',
+        name_prefix=prefix
+    )
+
+    callback = CallbackList([eval_callback, checkpoint_callback])
+
+    # 开始训练
+    model.learn(total_timesteps=80_000, progress_bar=True, callback=callback)
+    model.save(f"{log_root}/{prefix}_final_model")
 
 

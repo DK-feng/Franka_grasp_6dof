@@ -7,7 +7,7 @@ import time
 if __name__ == '__main__':
 
     env_id = 'FrankaGrasp6Dof-v0'
-    env = gym.make(env_id, num_objects=1, render_mode='human')
+    env = gym.make(env_id, num_objects=1, render_mode='rgb_array')
     observation, info = env.reset()
 
     while True:

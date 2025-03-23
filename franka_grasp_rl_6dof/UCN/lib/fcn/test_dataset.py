@@ -41,7 +41,7 @@ class AverageMeter(object):
         return '{:.3f} ({:.3f})'.format(self.val, self.avg)
 
 
-def clustering_features(features, num_seeds=100):
+def clustering_features(features, num_seeds=25):
     metric = cfg.TRAIN.EMBEDDING_METRIC
     height = features.shape[2]
     width = features.shape[3]

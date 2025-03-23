@@ -7,7 +7,7 @@ import time
 if __name__ == '__main__':
 
     env_id = 'FrankaGrasp6Dof-v0'
-    env = gym.make(env_id, num_objects=1, render_mode='rgb_array')
+    env = gym.make(env_id, num_objects=1, render_mode='human')
     observation, info = env.reset()
 
     while True:
@@ -17,7 +17,7 @@ if __name__ == '__main__':
 
         if terminated or truncated:
             observation, info = env.reset()
-        print(f"timestep:{info['env_step']}\t reward:{reward}\t time_cost:{time.time()-time_now}")
+        print(f"timestep:{observation['timestep']}\t reward:{reward}\t time_cost:{time.time()-time_now}")
 
 
     env.close()

@@ -7,7 +7,7 @@ from typing import Dict
 from .PointNet2.pointnet2_cls_ssg import PointNet2
 from .models import FCN
 import numpy as np
-
+import time
 
 '''
     *   'all_PC':       all_PC,                             # (fixed_num_points, 3)
@@ -36,27 +36,29 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
         pointnet_weight_path: str = '/home/kaifeng/FYP/Extractor/PointNet2/checkpoints/best_model.pth',
         total_step: int = 30
     ) -> None:
-        super().__init__(observation_space, features_dim=pointnet_output_dim+fcn_output_dim)
+        super().__init__(observation_space, features_dim=fused_output_dim)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.total_step = total_step
 
         # nn.ModuleDict，而不是一个普通的字典，确保子模块会被正确注册到模型中
-        self.extractors = nn.ModuleDict()
+        extractors: Dict[str, nn.Module] = {}
 
         concate_input_dim = observation_space.spaces['joint_state'].shape[0] + observation_space.spaces['ee_state'].shape[0]
-        self.extractors['concat_FCN'] = FCN(
+        extractors['concat_FCN'] = FCN(
                 spaces.Box(low=-2.0, high=2.0, shape=(concate_input_dim,), dtype=np.float32),
                 fcn_output_dim).to(self.device)
 
-        self.extractors['all_PC'] = PointNet2(
+        extractors['all_PC'] = PointNet2(
                 observation_space.spaces["all_PC"],
                 pointnet_output_dim).to(self.device)
         check_points = torch.load(pointnet_weight_path)
-        self.extractors["all_PC"].load_state_dict(check_points['model_state_dict'])
+        extractors["all_PC"].load_state_dict(check_points['model_state_dict'])
         
         # 冻结 PointNet2 参数
-        for param in self.extractors["all_PC"].parameters():
+        for param in extractors["all_PC"].parameters():
             param.requires_grad = False
+
+        self.extractors = nn.ModuleDict(extractors)
 
         # timestep的投影MLP
         projec_dim = observation_space.spaces['ee_state'].shape[0] + observation_space.spaces['joint_state'].shape[0]
@@ -70,18 +72,37 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
 
 
     def forward(self, observations: TensorDict) -> torch.Tensor:
+        past_time = time.time()
+        # print('------------------------------')
+        # print(f'all_PC shape:{observations["all_PC"].shape}')
+        if len(observations["timestep"].shape) == 3:
+            observations["timestep"] = observations["timestep"].squeeze(1)
+        #print(f'timestep shape:{observations["timestep"].shape}')
+        pc_features = self.extractors["all_PC"](observations["all_PC"].to(self.device).transpose(1,2))  # [batch_size, 3, 1024]
 
-        pc_features = self.extractors["all_PC"](observations["all_PC"].to(self.device))
-
-        normalized_timestep = observations['timestep'].float().unsqueeze(-1)/(self.total_step - 1)
+        normalized_timestep = (torch.argmax(observations['timestep'], dim=-1, keepdim=True) / (self.total_step - 1)).float()
         normalized_ee_state = (observations['ee_state'].float() + 4.0) / 8.0
         normalized_joint_state = (observations['joint_state'].float() + 4.0) / 8.0
 
+        # print(f'normalized_timestep shape:{normalized_timestep.shape}')
+        # print(f'normalized_ee_state:{normalized_ee_state.shape}')
+        # print(f'normalized_joint_state:{normalized_joint_state.shape}')
+
+
         projected_timestep = self.projec_MLP(normalized_timestep)
+        #print(f'projected_timestep:{projected_timestep.shape}')
         concat_input = (torch.cat((normalized_ee_state, normalized_joint_state), dim=-1) + projected_timestep).to(self.device)
         kinematics_features = self.extractors["concat_FCN"](concat_input).to(self.device)
 
-        combined_features = torch.cat([pc_features, kinematics_features], dim=1)
+        # print(f'pc_features shape:{pc_features.shape}')
+        # print(f'kinematics_features:{kinematics_features.shape}')
+        # print(f"extractor time cost:{time.time() - past_time}")
+        # print(next(self.extractors['all_PC'].parameters()).device)
+        # print(next(self.extractors['concat_FCN'].parameters()).device)
+        # print(next(self.projec_MLP.parameters()).device)
+        # print(next(self.fusion_layer.parameters()).device)
+        # print('------------------------------\n')
+        combined_features = torch.cat([pc_features, kinematics_features], dim=-1)
         fused_features = self.fusion_layer(combined_features)
 
         return fused_features

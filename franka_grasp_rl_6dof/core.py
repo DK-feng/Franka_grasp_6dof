@@ -84,10 +84,6 @@ class Panda(gym.Env):
         if self.rendering:
             width, height, rgb_image, depth_image, true_mask = p.getCameraImage(self.camera_width, self.camera_height, self.view_matrix, self.projection_matrix, renderer=p.ER_BULLET_HARDWARE_OPENGL)
         else:
-            print(self.view_matrix)
-            print(self.projection_matrix)
-            print(self.camera_width)
-            print(self.camera_height)
             width, height, rgb_image, depth_image, true_mask = p.getCameraImage(self.camera_width, self.camera_height, self.view_matrix, self.projection_matrix, renderer=p.ER_TINY_RENDERER)
 
         rgb_image = np.array(rgb_image).reshape((self.camera_height, self.camera_width, 4))[:, :, :3]
@@ -522,7 +518,7 @@ class RobotTaskEnv(gym.Env):
                 #'target_PC': self.curr_acc_target_points,  # (fixed_num_points * split, 3)
                 #'obstacal_PC': self.curr_acc_obstacal_points,  # (fixed_num_points * (1-split) - plane_points, 3)
                 #'plane_PC': self.curr_acc_plane_points,  # (plane_points, 3)
-                'timestep': self._env_step,  # 0~29
+                'timestep':  min(self._env_step, self.total_step-1),  # 0~29
                 'joint_state': self.robot.get_joint_positions()[:7],    # (7,)
                 'ee_state': ee_state}  # (x, y, z, rx, ry, rz)
 
@@ -675,20 +671,6 @@ class RobotTaskEnv(gym.Env):
     ) -> Optional[np.ndarray]:
         """Render.
         If render mode is "rgb_array" or "human, return an RGB array of the scene. Else, do nothing and return None.
-        Args:
-            width (int, optional): Image width. Defaults to 720.
-            height (int, optional): Image height. Defaults to 480.
-            target_position (np.ndarray, optional): Camera targetting this postion, as (x, y, z).
-                Defaults to [0., 0., 0.].
-            distance (float, optional): Distance of the camera. Defaults to 1.4.
-            yaw (float, optional): Yaw of the camera. Defaults to 45.
-            pitch (float, optional): Pitch of the camera. Defaults to -30.
-            roll (int, optional): Rool of the camera. Defaults to 0.
-            mode (str, optional): Deprecated: This argument is deprecated and will be removed in a future
-                version. Use the render_mode argument of the constructor instead.
-
-        Returns:
-            RGB np.ndarray or None: An RGB array if mode is 'rgb_array', else None.
         """
         if self.render_mode in ["rgb_array", "human"]:
             target_position = target_position if target_position is not None else np.zeros(3)
@@ -711,7 +693,6 @@ class RobotTaskEnv(gym.Env):
                 shadow=True,
                 renderer=p.ER_BULLET_HARDWARE_OPENGL,
             )
-            # With Python3.10, pybullet return flat tuple instead of array. So we need to build create the array.
             rgba = np.array(rgba, dtype=np.uint8).reshape((height, width, 4))
             return rgba[..., :3]
 

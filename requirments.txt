@@ -1,0 +1,8 @@
+python == 3.10
+gymnasium
+pybullet
+stable-baselines3
+torch
+easydict
+opencv-python
+transforms3d

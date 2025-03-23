@@ -11,6 +11,8 @@ from datetime import datetime
 import os
 
 
+
+
 if __name__ == '__main__':
 
     # 记录地址
@@ -33,11 +35,9 @@ if __name__ == '__main__':
     eval_env.recording = False 
 
     # SAC + HER 配置
-    model = SAC(policy="MultiInputPolicy",env=env, batch_size=512, gamma=0.98, learning_rate=1e-4, verbose=1, 
-            train_freq=4, gradient_steps=4, tau=0.05, tensorboard_log=f"{log_root}/tensorboard", learning_starts=2000,
-            buffer_size=30000, replay_buffer_class=HerReplayBuffer, device="cuda:0", seed=0,
-            # Parameters for HER    
-            replay_buffer_kwargs=dict(n_sampled_goal=4, goal_selection_strategy="future"),
+    model = SAC(policy="MultiInputPolicy",env=env, batch_size=128, gamma=0.98, learning_rate=1e-4, verbose=1, 
+            train_freq=16, gradient_steps=16, tau=0.02, tensorboard_log=f"{log_root}/tensorboard", learning_starts=100,
+            buffer_size=50000, device="cuda:0", seed=0,
             # Parameters for SAC
             policy_kwargs=dict(
                 features_extractor_class=CustomCombinedExtractor,
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     callback = CallbackList([eval_callback, checkpoint_callback])
 
     # 开始训练
-    model.learn(total_timesteps=80_000, progress_bar=True, callback=callback)
+    model.learn(total_timesteps=50_000, progress_bar=True, callback=callback)
     model.save(f"{log_root}/{prefix}_final_model")
 
 

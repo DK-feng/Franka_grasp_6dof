@@ -35,7 +35,7 @@ class UCN:
         # 输入： depth: [batch, height, width]
 
         # rgb: [batch, 3, height, width]
-        rgb_image = torch.from_numpy(rgb_image)
+        rgb_image = torch.from_numpy(rgb_image).float()
         pixel_means = torch.from_numpy(self.PIXEL_MEANS / 255.0)
         rgb_image -= pixel_means
         if len(rgb_image.shape) == 3:
@@ -47,7 +47,7 @@ class UCN:
         height, width = depth_image.shape[0], depth_image.shape[1]
         point_cloud = compute_xyz(depth_image, self.fx, self.fy, self.px, self.py, height, width)
 
-        depth_data = torch.from_numpy(point_cloud).permute(2, 0, 1)
+        depth_data = torch.from_numpy(point_cloud).float().permute(2, 0, 1)
         data['depth'] = depth_data.unsqueeze(0)
 
         # 0.08S

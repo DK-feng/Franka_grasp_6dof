@@ -96,7 +96,7 @@ if __name__ == '__main__':
 
 
     for i in range(1000):
-        x = torch.randn([1, 3, 1024]).cuda()
+        x = torch.randn([2, 3, 1024]).cuda()
         #x = torch.randn([1, 3, 1024])
         time_now = time.time()
         y = model(x)

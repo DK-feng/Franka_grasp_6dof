@@ -51,7 +51,7 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
         extractors['all_PC'] = PointNet2(
                 observation_space.spaces["all_PC"],
                 pointnet_output_dim).to(self.device)
-        check_points = torch.load(pointnet_weight_path)
+        check_points = torch.load(pointnet_weight_path, weights_only=False)
         extractors["all_PC"].load_state_dict(check_points['model_state_dict'])
         
         # 冻结 PointNet2 参数

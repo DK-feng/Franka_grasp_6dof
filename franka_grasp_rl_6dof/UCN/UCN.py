@@ -13,7 +13,7 @@ class UCN:
         self.NUM_CALSS = NUM_CLASS
         self.DEVICE = DEVICE
         self.network_name = 'seg_resnet34_8s_embedding'
-        self.network_data = torch.load('/home/kaifeng/FYP/franka_grasp_rl_6dof/UCN/data/checkpoints/seg_resnet34_8s_embedding_cosine_rgbd_add_sampling_epoch_16.checkpoint.pth')
+        self.network_data = torch.load('/home/kaifeng/FYP/franka_grasp_rl_6dof/UCN/data/checkpoints/seg_resnet34_8s_embedding_cosine_rgbd_add_sampling_epoch_16.checkpoint.pth', weights_only=False)
         self.network = networks.__dict__[self.network_name](NUM_CLASS, 64, self.network_data).cuda(device=DEVICE)
         self.network.eval()
         # self.network_data_crop = torch.load('UCN/data/checkpoints/seg_resnet34_8s_embedding_cosine_rgbd_add_crop_sampling_epoch_16.checkpoint.pth')

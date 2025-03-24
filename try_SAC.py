@@ -23,7 +23,7 @@ if __name__ == '__main__':
     os.makedirs(log_root, exist_ok=True)
 
     env_id = 'FrankaGrasp6Dof-v0'
-    num_cpu = 2
+    num_cpu = 4
 
     # 训练环境
     env = make_vec_env(env_id, n_envs=num_cpu, seed=0, vec_env_cls=SubprocVecEnv,
